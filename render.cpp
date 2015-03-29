@@ -70,10 +70,14 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
                        float matrixSampleRate, float audioSampleRate,
                        void *userData)
 {
+    // STUFF FOR CARRIER SIGNAL.
+    // Maybe move this to render() to make it adjustable by the potentiometer through matrixIn?
     gCarrierFreq = *(float *)userData; // if no user data, it starts at 440. I would like it to be
                                         // selectable via a potentiometer but let's not get crazy.
     gNumSamplesPerTooth = SAMPLE_RATE / gCarrierFreq; // calculate that for the sawtooth wave
     gIntervalOfStepsToTopOfTooth = 2.0/float(gNumSamplesPerTooth); // range of 2: -1 to 1. ie for 50hz this would be ~0.0022675
+
+
     // SCRUB A DUB DUB: Initialise the delay buffers to 1 so there's no 0 coefficients.
     for (int i = 0; i < 2; i++) {
         gModulatorX[i] = 1;
@@ -155,7 +159,43 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
 void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audioOut,
             float *matrixIn, float *matrixOut)
 {
-
+    /*
+     * TESTING BANDS
+     *
+     * for (int n = 0; n < numAudioFrames; n++) {
+     *      // Generate carrier wave.
+     *      if (n == 0)
+     *          gSawCarrierOut = gPhaseAtEndOfPrevFrame;
+     *      gSawCarrierOut += gIntervalOfStepsToTopOfTooth;
+     *      if (gSawCarrierOut >= 1.0)
+     *          gSawCarrierOut = -1.0;
+     *      if (n >= (numAudioFrames-1))
+     *          gPhaseAtEndOfPrevFrame = gSawCarrierOut;
+     *
+     *      // Now, put that sample through 2 band filters.
+     *      float carrierSamplesOut[10];
+     *      for (int i = 0; i < 10; i++) {
+     *          carrierSamplesOut[i] = gCoeffs[i][2] * gSawCarrierOut + gCoeffs[i][3] * gCarrierX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gCarrierX[gWritePointer] - gCoeffs[i][0] * gCarrierY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gCarrierY[i][gWritePointer];
+     *      // carrier output buffers:
+     *      gCarrierY[i][gWritePointer] = modulatorSamplesOut[i];
+     *      }
+     *
+     *      // Put the input in the X delay buffer:
+     *      gCarrierX[gWritePointer] = gSawCarrierOut;
+     *
+     *      // Put the first band's output on the right channel:
+     *      audioOut[n*2] = carrierSamplesOut[0];
+     *      // Put the second band's output on the left channel:
+     *      audioOut[n*2+1] = carrierSamplesOut[1];
+     *
+     *      // Finally, advance the write pointer:
+     *      gWritePointer++;
+     *          if (gWritePointer >= 2)
+     *      gWritePointer = 0;
+     *
+     *
+     * }
+     */
 
     for (int n = 0; n < numAudioFrames; n++) {
         // GET A CARRIER SAMPLE.
@@ -171,7 +211,7 @@ void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audi
         }
         // KEEPING PHASE: If we're on the last sample of the frame (n=numFrames-1) then set gPhaseAtEndOfPrevFrame
         // to whatever value we're on now:
-        if (n >= numAudioFrames-1) {
+        if (n >= (numAudioFrames-1)) {
             gPhaseAtEndOfPrevFrame = gSawCarrierOut;
         }
 
@@ -228,19 +268,27 @@ void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audi
             gWritePointer = 0;
 
 
-} // end big FOR loop that goes through samples
-        // MASTER TO DO LIST:
+    } // end big FOR loop that goes through samples
+        // Updated to do list:
+
+        // Find a way to check values of band pass - goddammit MATLAB.
+        // Use scope and get readings for carrier signal in various bands with test written at top of render()
+        //      (comment out the rest).
+        // Finesse level detector - find a better algorithm.
+        // White noise for sibilance.
+        // Potentiometer to adjust carrier signal - move calcualtion of relevant variables from initialise_render()
+        //      to render(), try it out.
 
         // MAKE A SAWTOOTH CARRIER SIGNAL. - Kind of there.
-        // CALCULATE COEFFS. - Done. Need to double check values with MATLAB.
+        // CALCULATE COEFFS. - Done. Need to double check values with MATLAB (Mar 30 - tried to double check with MATLAB
+        //      but I have no idea how to get sane values out of MATLAB for bandpass filters.)
         // SHOVE THEM BOTH THROUGH THE BANK OF BAND PASS FILTERS USING COEFFS ABOVE. - Done
-        // ENVELOPE FOLLOWER - omg how
-        // WHITE NOISE FOR SIBILANCE - OMG HOW
+        // ENVELOPE FOLLOWER - elementary one in place, needs finesse.
+        // WHITE NOISE FOR SIBILANCE - omg how
         // ADJUST CARRIER FREQUENCY WITH POT OR SOMETHING - Maybe ridiculous.
-        // FIGURE OUT HOW TO CALCULATE FINAL OUTPUT.
+        // FIGURE OUT HOW TO CALCULATE FINAL OUTPUT - Done!
         // ???
-    }
-        // PROFIT.
+} // end render function
 
 // cleanup_render() is called once at the end, after the audio has stopped.
 // Release any resources that were allocated in initialise_render().
