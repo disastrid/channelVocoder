@@ -57,9 +57,10 @@ float gModulatorY[10][2];
 // Input samples are the same for each band, so no 2D screwiness:
 float gCarrierX[2];
 float gModulatorX[2];
-// Two 2D buffers for the output - one for carrier signal, one for modulator signal:
-float gCarrierSamplesOut[10];
-float gModulatorSamplesOut[10];
+float gPeaks[10];
+float gReleaseCoefficient = 0.9;
+float gBandOutputsToBeSummed[10];
+
 // One lonely little write pointer:
 int gWritePointer;
 
@@ -78,12 +79,18 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
         gModulatorX[i] = 1;
         gCarrierX[i] = 1;
     }
+    // Initialise the 2D sample buffers to 1.
     for (int i = 0; i < 10; i++) {
         for (int j = 0; j < 2; j++) {
             gCarrierY[i][j] = 1;
             gModulatorY[i][j] = 1;
         }
     }
+    // Initialise peaks to zero.
+    for (int i = 0; i < 10; i++) {
+        gPeaks[i] = 0;
+    }
+
     // Find the upper and lower frequencies for each band:
     for (int i = 0; i < 10; i++) {
         float freq = 22.0;
@@ -112,7 +119,7 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
             switch (j) {
             case 0:
                 // calculate a1.
-                gCoeffs[i][j] = -8 + w0*2*t2/norm;
+                gCoeffs[i][j] = (-8 + w0*2*t2)/norm;
                 break;
             case 1:
                 // calculate a2.
@@ -177,21 +184,38 @@ void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audi
         // Store the output samples.
         // Implement circular buffer thing for storage and retrieval.
 
+        float carrierSamplesOut[10];
+        float modulatorSamplesOut[10];
         for (int i = 0; i < 10; i++) { // for each band ...
             // do the filtering on both the carrier and modulator signals.
             // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
-            gCarrierSamplesOut[i] = gCoeffs[i][2] * gSawCarrierOut + gCoeffs[i][3] * gCarrierX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gCarrierX[gWritePointer] - gCoeffs[i][0] * gCarrierY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gCarrierY[i][gWritePointer];
-            gModulatorSamplesOut[i] = gCoeffs[i][2] * monoVoiceSample + gCoeffs[i][3] * gModulatorX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gModulatorX[gWritePointer] - gCoeffs[i][0] * gModulatorY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gModulatorY[i][gWritePointer];
+            // Two 2D buffers for the output - one for carrier signal, one for modulator signal:
+            carrierSamplesOut[i] = gCoeffs[i][2] * gSawCarrierOut + gCoeffs[i][3] * gCarrierX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gCarrierX[gWritePointer] - gCoeffs[i][0] * gCarrierY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gCarrierY[i][gWritePointer];
+            modulatorSamplesOut[i] = gCoeffs[i][2] * monoVoiceSample + gCoeffs[i][3] * gModulatorX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gModulatorX[gWritePointer] - gCoeffs[i][0] * gModulatorY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gModulatorY[i][gWritePointer];
+            // ENVELOPE FOLLOWER:
+            // (This needs a level detector)
+            if (abs(modulatorSamplesOut[i]) > gPeaks[i]) {
+                gPeaks[i] = modulatorSamplesOut[i];
+            } else {
+                gPeaks[i] -= gReleaseCoefficient;
+            }
             // Put each output in the delay buffer, replacing the oldest sample:
-            gModulatorY[i][gWritePointer] = gCarrierSamplesOut[i];
-            gCarrierY[i][gWritePointer] = gModulatorSamplesOut[i];
+            gModulatorY[i][gWritePointer] = carrierSamplesOut[i];
+            gCarrierY[i][gWritePointer] = modulatorSamplesOut[i];
+            gBandOutputsToBeSummed[i] = carrierSamplesOut[i] * gPeaks[i];
         }
-        // Now we have a carrier and modulator sample, for each of the 10 bands.
 
-        // TODO: Envelope follower for each band.
-        // TODO: Some magic crap and then send audio to output. (Add all band samples together and divide by the
-        // number of bands, I'm assuming? Then add modulator and carrier together and divide by 2?
+        // Add up the signals on all 10 bands:
+        float summedBands;
+        for (int i = 0; i < 10; i++) {
+            summedBands = gBandOutputsToBeSummed[i];
+        }
 
+        // OUTPUT
+        // Put the summed values of all bands on the output.
+
+        audioOut[n*2] = summedBands;
+        audioOut[n*2+1] = summedBands;
 
 
         // NOW put the current X samples in their buffers, to replace the oldest samples
