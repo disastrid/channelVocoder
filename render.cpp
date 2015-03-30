@@ -160,6 +160,16 @@ void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audi
             float *matrixIn, float *matrixOut)
 {
     /*
+     *  POSSIBLE SOLUTION FOR USING POTENTIOMETER TO CONTROL TEMPO
+     *  // First, get the value from the analog pin (channel 0):
+     *  float potentiometerReading = matrixIn[(n/2)*8+0];
+     *  // Our range is about 0.0-0.82. Map that to the range 50-2000 to get a range of Hz for the carrier:
+     *  float reading = map(potentiometerReading, 0.0, 0.82, 50, 2000);
+     *  // Cast that mapped float value to an int:
+     *  int carrierFrequency = reading;
+     */
+
+    /*
      * TESTING BANDS
      *
      * for (int n = 0; n < numAudioFrames; n++) {
@@ -276,8 +286,7 @@ void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audi
         //      (comment out the rest).
         // Finesse level detector - find a better algorithm.
         // White noise for sibilance.
-        // Potentiometer to adjust carrier signal - move calcualtion of relevant variables from initialise_render()
-        //      to render(), try it out.
+        // Potentiometer - possible solution at top of render()
 
         // MAKE A SAWTOOTH CARRIER SIGNAL. - Kind of there.
         // CALCULATE COEFFS. - Done. Need to double check values with MATLAB (Mar 30 - tried to double check with MATLAB
