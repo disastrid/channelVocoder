@@ -1,6 +1,7 @@
 /* test doc for bandpass coefficients*/
 
 #include <stdio.h>
+#include <math.h>
 
 #define SAMPLE_RATE 44100.0
 #define SQRT_2 1.41421356237
