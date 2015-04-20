@@ -13,7 +13,6 @@
 
 #include "../include/render.h"
 #include "../include/Utilities.h"
-#include "drums.h"
 #include <rtdk.h>
 #include <cmath>
 
@@ -30,6 +29,7 @@
 
 #define SAMPLE_RATE 44100.0
 #define SQRT_2 1.41421356237
+#define PI 3.14159265359
 
 
 
@@ -41,9 +41,9 @@ float gGeoMeans[10];
 // L = 10 * log(1/3) - 1/3 octaves
 
 
-float gCutoffFreqs[11];
+float gCutoffFreqs[11] = {22, 44, 88, 177, 355, 710, 1420, 2840, 5680, 11360, 22720};
 
-int gCarrierFreq = 440;
+float gCarrierFreq = 100; // can't make this any lower than 35, because then it's a fart machine.
 int gNumberOfSamplesPassed = 0;
 float gSawCarrierOut = 0;
 int gNumSamplesPerTooth;
@@ -61,6 +61,11 @@ float gPeaks[10];
 float gReleaseCoefficient = 0.9;
 float gBandOutputsToBeSummed[10];
 
+float gSummedBands;
+int gAttackInMs;
+int gReleaseInMs;
+float gEnvelope = 0.0;
+
 // One lonely little write pointer:
 int gWritePointer;
 
@@ -70,13 +75,6 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
                        float matrixSampleRate, float audioSampleRate,
                        void *userData)
 {
-    // STUFF FOR CARRIER SIGNAL.
-    // Maybe move this to render() to make it adjustable by the potentiometer through matrixIn?
-    gCarrierFreq = *(float *)userData; // if no user data, it starts at 440. I would like it to be
-                                        // selectable via a potentiometer but let's not get crazy.
-    gNumSamplesPerTooth = SAMPLE_RATE / gCarrierFreq; // calculate that for the sawtooth wave
-    gIntervalOfStepsToTopOfTooth = 2.0/float(gNumSamplesPerTooth); // range of 2: -1 to 1. ie for 50hz this would be ~0.0022675
-
 
     // SCRUB A DUB DUB: Initialise the delay buffers to 1 so there's no 0 coefficients.
     for (int i = 0; i < 2; i++) {
@@ -96,17 +94,18 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
     }
 
     // Find the upper and lower frequencies for each band:
-    for (int i = 0; i < 10; i++) {
-        float freq = 22.0;
+    /*float freq = 22.0;
+    for (int i = 0; i < 11; i++) {
         gCutoffFreqs[i] = freq;
         freq = freq * 2;
-    }
+    }*/
 
     // Find the geometric mean for each band:
-    for (int i = 0; i < 10; i++) { // < 9 because of the i+1 .. if it's <11 we'll go out of range
-        float mean;
-        mean = sqrt(gCutoffFreqs[i] * gCutoffFreqs[i+1]);
-        gGeoMeans[i] = mean;
+    for (int i = 0; i < 10; i++) { // < 10 because of the i+1 .. if it's <11 we'll go out of range
+        float mean, result;
+        mean = gCutoffFreqs[i] * gCutoffFreqs[i+1];
+        result = sqrt(mean);
+        gGeoMeans[i] = result;
     }
     // Great, we have geometric means. Now we need a for loop to calculate the coeffs for each band.
     // First we need some numbers or something:
@@ -117,37 +116,36 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
     // NOW CALCULATE:
     for (int i = 0; i < 10; i++) {
         float w0 = gGeoMeans[i];
-        float w02 = w0*w0;
-        float norm = 4+ (w0*2*t/q) + w0*t*2;
+        float w02 = w0 * w0;
+        float norm = 4 + (w0*2*t/q) + w02*t2;
         for (int j = 0; j < 5; j++) {
-            switch (j) {
-            case 0:
+            if (j == 0)
                 // calculate a1.
-                gCoeffs[i][j] = (-8 + w0*2*t2)/norm;
-                break;
-            case 1:
+                gCoeffs[i][j] = (-8 + w02*t2*2)/norm;
+            if (j == 1)
                 // calculate a2.
-                gCoeffs[i][j] = (4-w0*t*2/q + w0*t2)/norm;
-                break;
-            case 2:
+                gCoeffs[i][j] = (4-(w0*t*2/q) + w02*t2)/norm;
+            if (j == 2)
                 // calculate b0.
                 gCoeffs[i][j] = (w0*2*t/q)/norm;
-                break;
-            case 3:
+            if (j == 3)
                 // b1 will always be 0.
                 gCoeffs[i][j] = 0;
-                break;
-            case 4:
+            if (j == 4)
                 // calculate b2.
-                gCoeffs[i][j] = (-1*w0*2*t/q)/norm;
-                break;
-            default:
-                // something is seriously wrong if it's something other than the above. Evacuate!
-                break;
-            }
+                gCoeffs[i][j] = (-w0*2*t/q)/norm;
         }
     }
 
+    for (int i = 0; i < 10; i++) {
+        rt_printf("+++\n");
+        rt_printf("BAND %d:\n", i);
+        rt_printf("lower cutoff: %f high cutoff: %f\n", gCutoffFreqs[i], gCutoffFreqs[i+1]);
+        rt_printf("Geo mean: %f\n", gGeoMeans[i]);
+        rt_printf("COEFFICIENTS: \n");
+        rt_printf("a1: %f a2: %f\n", gCoeffs[i][0], gCoeffs[i][1]);
+        rt_printf("b0: %f b1: %f b2: %f\n", gCoeffs[i][2], gCoeffs[i][3], gCoeffs[i][4]);
+    }
     return true;
 }
 
@@ -159,54 +157,100 @@ bool initialise_render(int numMatrixChannels, int numAudioChannels,
 void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audioOut,
             float *matrixIn, float *matrixOut)
 {
-    /*
-     *  POSSIBLE SOLUTION FOR USING POTENTIOMETER TO CONTROL TEMPO
-     *  // First, get the value from the analog pin (channel 0):
-     *  float potentiometerReading = matrixIn[(n/2)*8+0];
-     *  // Our range is about 0.0-0.82. Map that to the range 50-2000 to get a range of Hz for the carrier:
-     *  float reading = map(potentiometerReading, 0.0, 0.82, 50, 2000);
-     *  // Cast that mapped float value to an int:
-     *  int carrierFrequency = reading;
-     */
 
-    /*
-     * TESTING BANDS
-     *
-     * for (int n = 0; n < numAudioFrames; n++) {
-     *      // Generate carrier wave.
-     *      if (n == 0)
-     *          gSawCarrierOut = gPhaseAtEndOfPrevFrame;
-     *      gSawCarrierOut += gIntervalOfStepsToTopOfTooth;
-     *      if (gSawCarrierOut >= 1.0)
-     *          gSawCarrierOut = -1.0;
-     *      if (n >= (numAudioFrames-1))
-     *          gPhaseAtEndOfPrevFrame = gSawCarrierOut;
-     *
-     *      // Now, put that sample through 2 band filters.
-     *      float carrierSamplesOut[10];
-     *      for (int i = 0; i < 10; i++) {
-     *          carrierSamplesOut[i] = gCoeffs[i][2] * gSawCarrierOut + gCoeffs[i][3] * gCarrierX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gCarrierX[gWritePointer] - gCoeffs[i][0] * gCarrierY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gCarrierY[i][gWritePointer];
-     *      // carrier output buffers:
-     *      gCarrierY[i][gWritePointer] = modulatorSamplesOut[i];
-     *      }
-     *
-     *      // Put the input in the X delay buffer:
-     *      gCarrierX[gWritePointer] = gSawCarrierOut;
-     *
-     *      // Put the first band's output on the right channel:
-     *      audioOut[n*2] = carrierSamplesOut[0];
-     *      // Put the second band's output on the left channel:
-     *      audioOut[n*2+1] = carrierSamplesOut[1];
-     *
-     *      // Finally, advance the write pointer:
-     *      gWritePointer++;
-     *          if (gWritePointer >= 2)
-     *      gWritePointer = 0;
-     *
-     *
-     * }
-     */
 
+     for (int n = 0; n < numAudioFrames; n++) {
+        float sampleIn = audioIn[n*2+1];
+
+        // TODO: IMPLEMENT MULTIPLE CARRIER FREQUENCIES FOR HARMONIC EFFECT, adjustable
+        // with knobs.
+        float potentiometerReading = matrixIn[(n/2)*8+0];
+        // Our range is about 0.0-0.82. Map that to the range 50-2000 to get a range of Hz for the carrier:
+        float reading = map(potentiometerReading, 0.0, 0.82, 50, 2000);
+        // Cast that mapped float value to an int:
+        int carrierFrequency = reading;
+        gNumSamplesPerTooth = SAMPLE_RATE / carrierFrequency; // calculate that for the sawtooth wave
+        gIntervalOfStepsToTopOfTooth = 2.0/float(gNumSamplesPerTooth); // range of 2: -1 to 1. ie for 50hz this would be ~0.0022675
+
+         int carrierFrequency = 100;
+
+         // Generate carrier wave.
+         // TODO: Generate more than 1 carrier wave.
+         if (n == 0)
+             gSawCarrierOut = gPhaseAtEndOfPrevFrame;
+             gSawCarrierOut += gIntervalOfStepsToTopOfTooth;
+         if (gSawCarrierOut >= 1.0)
+             gSawCarrierOut = -1.0;
+         if (n >= (numAudioFrames-1))
+         gPhaseAtEndOfPrevFrame = gSawCarrierOut;
+         audioOut[n*2+1] = audioOut[n*2] = gSawCarrierOut;
+
+
+        // GET A MODULATION (VOICE) SAMPLE.
+        float monoVoiceSample = (audioIn[n*2]+audioIn[n*2+1])/2;
+
+
+
+        float carrierSamplesOut[10];
+        float modulatorSamplesOut[10];
+        for (int i = 0; i < 10; i++) { // for each band ...
+
+        // do the filtering on both the carrier and modulator signals.
+        // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+        // Two 2D buffers for the output - one for carrier signal, one for modulator signal:
+        carrierSamplesOut[i] = gCoeffs[i][2] * gSawCarrierOut + gCoeffs[i][3] * gCarrierX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gCarrierX[gWritePointer] - gCoeffs[i][0] * gCarrierY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gCarrierY[i][gWritePointer];
+        modulatorSamplesOut[i] = gCoeffs[i][2] * monoVoiceSample + gCoeffs[i][3] * gModulatorX[(gWritePointer + 2 - 1) % 2] + gCoeffs[i][4] * gModulatorX[gWritePointer] - gCoeffs[i][0] * gModulatorY[i][(gWritePointer + 2 - 1) % 2] - gCoeffs[i][1] * gModulatorY[i][gWritePointer];
+        // ENVELOPE FOLLOWER:
+        // (This needs a level detector)
+        // inspired by this: http://www.musicdsp.org/archive.php?classid=2#136
+        // This should probably be declared outside the loop but i'm leaving it here for now:
+        float coefficientForAttack = exp(log(0.01)/( gAttackInMs * SAMPLE_RATE * 0.001));
+        float coefficientForRelease = exp(log(0.01)/( gReleaseInMs * SAMPLE_RATE * 0.001));
+
+        float tmp = fabs(monoVoiceSample);
+        if(tmp > gEnvelope)
+            gEnvelope = coefficientForAttack * (gEnvelope - tmp) + tmp;
+        else
+            gEnvelope = coefficientForRelease * (gEnvelope - tmp) + tmp;
+
+        // And this is what I had originally, which is pretty similar:
+        if (abs(modulatorSamplesOut[i]) > gPeaks[i]) {
+                        gPeaks[i] = modulatorSamplesOut[i];
+                    } else {
+                        gPeaks[i] -= gReleaseCoefficient;
+                    }
+                    // Put each output in the delay buffer, replacing the oldest sample:
+                    gModulatorY[i][gWritePointer] = carrierSamplesOut[i];
+                    gCarrierY[i][gWritePointer] = modulatorSamplesOut[i];
+                    gBandOutputsToBeSummed[i] = carrierSamplesOut[i] * gPeaks[i];
+                }
+
+                // Add up the signals on all 10 bands:
+                float summedBands;
+                for (int i = 0; i < 10; i++) {
+                    summedBands = gBandOutputsToBeSummed[i];
+                }
+
+                // OUTPUT
+                // Put the summed values of all bands on the output.
+
+                audioOut[n*2] = summedBands;
+                audioOut[n*2+1] = summedBands;
+
+
+                // NOW put the current X samples in their buffers, to replace the oldest samples
+                gCarrierX[gWritePointer] = gSawCarrierOut;
+                gModulatorX[gWritePointer] = monoVoiceSample;
+
+                // ADVANCE THE WRITE POINTER
+                gWritePointer++;
+                if (gWritePointer >= 2)
+                    gWritePointer = 0;
+
+     }
+
+
+    /* MAIN RENDER LOOP
     for (int n = 0; n < numAudioFrames; n++) {
         // GET A CARRIER SAMPLE.
         if (n == 0) {
@@ -278,7 +322,8 @@ void render(int numMatrixFrames, int numAudioFrames, float *audioIn, float *audi
             gWritePointer = 0;
 
 
-    } // end big FOR loop that goes through samples
+    } */
+    // end big FOR loop that goes through samples
         // Updated to do list:
 
         // Find a way to check values of band pass - goddammit MATLAB.
