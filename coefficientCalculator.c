@@ -53,7 +53,8 @@ int main( int argc, char *argv[] )
     // Find the geometric mean for each band:
     for (int i = 0; i < 10; i++) { // < 10 because of the i+1 .. if it's <11 we'll go out of range
         float mean, result;
-        mean = gCutoffFreqs[i] * gCutoffFreqs[i+1];
+        // Prewarp the upper and lower cutoffs before multiplying together:
+        mean = 2/t * tan(gCutoffFreqs[i]*2*PI*t/2) * 2/t * tan(gCutoffFreqs[i+1]*2*PI*t/2);
         result = sqrt(mean);
         gGeoMeans[i] = result;
     }
@@ -70,7 +71,7 @@ int main( int argc, char *argv[] )
             
         if (i == 0) { // calculate lowpass filter at the bottom
             
-            float w0 = 2/t * tan(gCutoffFreqs[i]*2*PI*t/2); // this will be used when we're taking in the input from the command line
+            float w0 = gGeoMeans[i]; // this will be used when we're taking in the input from the command line
             float w02 = w0*w0; 
             float q = SQRT_2/2;
             float norm = 4+((w0*2*t)/q) + w0*t2; // normalising factor, as explained in the accompanying doc
